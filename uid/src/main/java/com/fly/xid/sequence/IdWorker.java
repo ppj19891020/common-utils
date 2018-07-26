@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -49,14 +50,22 @@ public class IdWorker {
     private final static String ROOT_PATH= FILE_SEPERATEOR + "snowflake";
     // 分布式锁
     private final static String LOCK_PATH = ROOT_PATH + FILE_SEPERATEOR + "lock";
-    // 服务器临时节点
+    // 服务器临时节点-存放workid
     private final static String EPHEMEERAL_PATH = FILE_SEPERATEOR + "server-ephemeral";
+    // 服务器临时节点-存放心跳时间
+    private final static String EPHEMEERAL_HEART = FILE_SEPERATEOR + "server-heart";
     // 切换路径
     private final static String SWITCH_PATH = FILE_SEPERATEOR + "switch";
     // curator
     private static CuratorFramework client = null;
-    // zk 节点
+    // zk 节点-服务器节点
     private String zkSequence = null;
+    // zk 心跳服务节点
+    private String serverHeartNodePath = null;
+    // 服务器心跳时间间隔
+    private final int interval = 1000;
+    // 心跳时间监测时间间隔阈值 15s
+    private final static Integer TIMESTAMP_THRESHOLD = 5000;
 
     /**
      * 保留workerId和lastTime, 以及备用workerId和其对应的lastTime
@@ -81,6 +90,14 @@ public class IdWorker {
             throw new IllegalArgumentException("worker Id can't be greater than %d or less than 0");
         }
         this.workerId = workerId;
+
+        // 校验服务器时间是否正常
+        boolean check = this.checkServerTimesamp();
+        if(!check){
+            stop();
+            Utils.halt_process(-1,"server timestamp greater than threshold,server startup fail, exit from the jvm");
+        }
+
         // 校验workid是否已存在
         InterProcessLock lock = new InterProcessSemaphoreMutex(client, LOCK_PATH);
         try{
@@ -96,6 +113,14 @@ public class IdWorker {
             // 初始化到zk中，保存到临时节点中
             zkSequence = client.create().creatingParentContainersIfNeeded().withMode(CreateMode.EPHEMERAL_SEQUENTIAL).forPath(ROOT_PATH + EPHEMEERAL_PATH +
                     FILE_SEPERATEOR + Utils.getIntranetIp() + "-",workerId.toString().getBytes());
+
+            // 服务器心跳节点
+            String[] zkSequenceSplit = zkSequence.split("/");
+            serverHeartNodePath = ROOT_PATH + EPHEMEERAL_HEART +
+                    FILE_SEPERATEOR + zkSequenceSplit[zkSequenceSplit.length-1];
+            client.create().creatingParentContainersIfNeeded().withMode(CreateMode.EPHEMERAL).forPath(serverHeartNodePath,Long.valueOf(timeGen()).toString().getBytes());
+            active.set(true);
+            startHeartBeatThread();
             LOGGER.info("ip:{} workid:{} 序列号:{}",Utils.getIntranetIp(),workerId,zkSequence);
         }catch (Exception ex){
             LOGGER.error("初始化全局id失败",ex);
@@ -108,8 +133,43 @@ public class IdWorker {
                 e.printStackTrace();
             }
         }
-        active.set(true);
         LOGGER.info("snowflow初始化成功，workid:{}",workerId);
+    }
+
+    /**
+     * 校验服务器时间是否异常
+     * @return
+     */
+    private boolean checkServerTimesamp(){
+        try{
+            if(null != client){
+                List<String> peershostPaths = client.getChildren().forPath(ROOT_PATH + EPHEMEERAL_HEART);
+                if(null == peershostPaths || peershostPaths.size() == 0){
+                    // 表示还没服务器注册过
+                    LOGGER.info("服务器还没注册心跳，当前服务器时间正常");
+                    return true;
+                }
+                // 总共时间
+                BigDecimal total = BigDecimal.ZERO;
+                for(String path:peershostPaths){
+                    Long serverTimestanp = Long.valueOf(new String(client.getData().forPath(ROOT_PATH + EPHEMEERAL_HEART + FILE_SEPERATEOR + path)));
+                    total = total.add(new BigDecimal(serverTimestanp));
+                }
+                // 均值
+                BigDecimal average = total.divide(new BigDecimal(peershostPaths.size()));
+                // 时间差大于阈值，则启动失败
+                if (Math.abs(average.longValue() - System.currentTimeMillis()) > TIMESTAMP_THRESHOLD){
+                    LOGGER.info("校验服务器时间存在异常，超过阈值{}",TIMESTAMP_THRESHOLD);
+                    return false;
+                }
+                LOGGER.info("校验时间通过，当前服务器时间正常");
+                return true;
+            }
+            return false;
+        }catch (Exception ex){
+            LOGGER.error("当前时间戳校验失败",ex);
+            return false;
+        }
     }
 
     public synchronized long nextId() {
@@ -194,6 +254,7 @@ public class IdWorker {
                     //增加一条切换记录
                     client.create().creatingParentContainersIfNeeded().withMode(CreateMode.PERSISTENT_SEQUENTIAL).forPath(
                             ROOT_PATH + SWITCH_PATH + FILE_SEPERATEOR + Utils.getIntranetIp() + "-",switchStr.getBytes());
+                    active.set(true);
                     return lastTimestamp;
                 }
             }
@@ -245,6 +306,32 @@ public class IdWorker {
             }
         }
         return existWorkerIds;
+    }
+
+    /**
+     * 服务节点心跳监测
+     */
+    private void startHeartBeatThread() {
+        Thread heartBeat = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while(active.get() == true) {
+                    if( serverHeartNodePath != null ) {
+                        if (client != null) {
+                            try {
+                                client.setData().forPath(serverHeartNodePath,Long.valueOf(timeGen()).toString().getBytes());
+                            } catch (Exception e) {
+                                LOGGER.error("Faild to set heartBeat timestamp for path: " + serverHeartNodePath);
+                            }
+                        }
+                    }
+                    Utils.sleepMs(interval);
+                }
+            }
+        });
+        heartBeat.setName("heartbeat");
+        heartBeat.setDaemon(true);
+        heartBeat.start();
     }
 
 }

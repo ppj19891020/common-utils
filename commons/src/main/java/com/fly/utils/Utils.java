@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetAddress;
+import java.nio.ByteBuffer;
 
 public class Utils {
 
@@ -36,6 +37,7 @@ public class Utils {
         try {
             Thread.sleep(1000);
         } catch (InterruptedException e) {
+            e.printStackTrace();
         }
         haltProcess(val);
     }
@@ -44,8 +46,19 @@ public class Utils {
         try {
             Thread.sleep(ms);
         } catch (InterruptedException e) {
-
+            e.printStackTrace();
         }
+    }
+
+    private static ByteBuffer buffer = ByteBuffer.allocate(8);
+    /**
+     * byte 数组与 long 的相互转换
+     * @param x
+     * @return
+     */
+    public static byte[] longToBytes(long x) {
+        buffer.putLong(0, x);
+        return buffer.array();
     }
 
 }
