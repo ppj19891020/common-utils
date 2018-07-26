@@ -2,10 +2,12 @@ package com.fly.xid.sequence;
 
 import com.fly.utils.Utils;
 import com.fly.utils.ZKUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.locks.InterProcessLock;
 import org.apache.curator.framework.recipes.locks.InterProcessSemaphoreMutex;
 import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.data.Stat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,6 +16,7 @@ import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 雪花算法id 生成器
@@ -41,7 +44,7 @@ public class IdWorker {
     private  static final int MAX_BACKWARD_MS = 500;
 
     private long sequence = 0L;
-    private Long workerId;
+    private volatile Long workerId;
 
     private AtomicBoolean active = new AtomicBoolean(false);
     //分隔符
@@ -62,10 +65,10 @@ public class IdWorker {
     private String zkSequence = null;
     // zk 心跳服务节点
     private String serverHeartNodePath = null;
-    // 服务器心跳时间间隔
-    private final int interval = 1000;
-    // 心跳时间监测时间间隔阈值 15s
-    private final static Integer TIMESTAMP_THRESHOLD = 5000;
+    // 服务器心跳时间间隔 10s
+    private final int interval = 10000;
+    // 心跳时间监测时间间隔阈值 40s
+    private final static Integer TIMESTAMP_THRESHOLD = 40000;
 
     /**
      * 保留workerId和lastTime, 以及备用workerId和其对应的lastTime
@@ -85,11 +88,11 @@ public class IdWorker {
 
     }
 
-    public IdWorker(Long workerId){
-        if (workerId > maxWorkerId || workerId < 0) {
+    public IdWorker(Long oldWorkerId){
+        if (oldWorkerId > maxWorkerId || oldWorkerId < 0) {
             throw new IllegalArgumentException("worker Id can't be greater than %d or less than 0");
         }
-        this.workerId = workerId;
+        this.workerId = oldWorkerId;
 
         // 校验服务器时间是否正常
         boolean check = this.checkServerTimesamp();
@@ -99,15 +102,11 @@ public class IdWorker {
         }
 
         // 校验workid是否已存在
-        InterProcessLock lock = new InterProcessSemaphoreMutex(client, LOCK_PATH);
         try{
-            lock.acquire();
             List<Long> existWorkerIds = this.getExistWorkerIds();
             if(null != existWorkerIds && existWorkerIds.size() > 0){
                 if(existWorkerIds.contains(workerId)){
-                    LOGGER.error("Failed to make serverNodePath , exit from the jvm");
-                    stop();
-                    Utils.halt_process(-1,"Failed to make serverNodePath , exit from the jvm");
+                   this.tryGenerateWorkIdByzk(this.timeGen());
                 }
             }
             // 初始化到zk中，保存到临时节点中
@@ -126,12 +125,6 @@ public class IdWorker {
             LOGGER.error("初始化全局id失败",ex);
             stop();
             Utils.halt_process(-1,"Failed to make serverNodePath , exit from the jvm");
-        }finally {
-            try {
-                lock.release();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
         }
         LOGGER.info("snowflow初始化成功，workid:{}",workerId);
     }
@@ -228,7 +221,7 @@ public class IdWorker {
         try{
             active.set(false);
             lock.acquire();
-            LOGGER.info("时钟发生回拨-原先workid：{} 当前时间:{} 最后时间：{}" ,currentMillis,lastTimestamp,workerId);
+            LOGGER.info("更换workid-原先workid：{} 当前时间:{} 最后时间：{}" ,currentMillis,lastTimestamp,workerId);
             List<Long> existWorkIds = this.getExistWorkerIds();
             if(null == existWorkIds || existWorkIds.size() == 0){
                 return null;
@@ -247,10 +240,19 @@ public class IdWorker {
                 if(lastTimestamp <= currentMillis){
                     //切换新的workid
                     String switchStr = currentMillis+"--:"+workerId+"->"+i;
-                    LOGGER.info("时钟发生回拨-切换后的workid：{} 当前时间:{} 最后时间：{}" ,currentMillis,lastTimestamp,workerId);
+
                     this.workerId = Long.valueOf(i);
-                    //更新zk的值
-                    client.setData().inBackground().forPath(zkSequence,this.workerId.toString().getBytes());
+                    //初始化workid冲突自动切换/运行中时间回拨自动切换
+                    if(StringUtils.isNotEmpty(zkSequence)){
+                        //更新zk的值
+                        Stat stat =client.checkExists().forPath(zkSequence);
+                        if(stat != null){
+                            client.setData().inBackground().forPath(zkSequence,this.workerId.toString().getBytes());
+                        }
+                        LOGGER.info("时钟发生回拨-切换后的workid：{} 当前时间:{} 最后时间：{}" ,currentMillis,lastTimestamp,workerId);
+                    }else{
+                        LOGGER.info("初始化workid冲突切换-切换后的workid：{} 当前时间:{} 最后时间：{}" ,currentMillis,lastTimestamp,workerId);
+                    }
                     //增加一条切换记录
                     client.create().creatingParentContainersIfNeeded().withMode(CreateMode.PERSISTENT_SEQUENTIAL).forPath(
                             ROOT_PATH + SWITCH_PATH + FILE_SEPERATEOR + Utils.getIntranetIp() + "-",switchStr.getBytes());
@@ -319,7 +321,9 @@ public class IdWorker {
                     if( serverHeartNodePath != null ) {
                         if (client != null) {
                             try {
-                                client.setData().forPath(serverHeartNodePath,Long.valueOf(timeGen()).toString().getBytes());
+                                Long time = timeGen();
+                                client.setData().forPath(serverHeartNodePath,time.toString().getBytes());
+                                LOGGER.info("serverHeartNodePath:{} 更新心跳时间:{}",serverHeartNodePath,time);
                             } catch (Exception e) {
                                 LOGGER.error("Faild to set heartBeat timestamp for path: " + serverHeartNodePath);
                             }

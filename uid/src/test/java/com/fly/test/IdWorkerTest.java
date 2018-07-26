@@ -32,7 +32,7 @@ public class IdWorkerTest {
             }
 
             values.put(value,value);
-            LOGGER.info("id:{}",value);
+//            LOGGER.info("id:{}",value);
         }
     }
 
