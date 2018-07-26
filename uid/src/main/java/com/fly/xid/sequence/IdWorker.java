@@ -29,7 +29,7 @@ public class IdWorker {
     private final static long maxWorkerId = -1L ^ (-1L << workerIdBits);
     // 毫秒内自增位
     private final static long sequenceBits = 10L;
-    // 机器ID偏左移12位
+    // 机器ID偏左移10位
     private final static long workerIdShift = sequenceBits;
     // 时间毫秒左移22位
     private final static long timestampLeftShift = sequenceBits + workerIdBits;
@@ -74,7 +74,7 @@ public class IdWorker {
 
     static {
         Calendar calendar = Calendar.getInstance();
-        calendar.set(2018, Calendar.JULY, 23);
+        calendar.set(2018, Calendar.JULY, 1);
         calendar.set(Calendar.HOUR_OF_DAY, 0);
         calendar.set(Calendar.MINUTE, 0);
         calendar.set(Calendar.SECOND, 0);
