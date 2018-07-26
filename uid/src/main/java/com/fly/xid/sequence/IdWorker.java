@@ -73,6 +73,7 @@ public class IdWorker {
         twepoch = calendar.getTimeInMillis();
         //初始化zk
         client = ZKUtils.getConnection();
+
     }
 
     public IdWorker(Long workerId){
@@ -176,7 +177,10 @@ public class IdWorker {
             // 最大workid
             int maxWorkId = existWorkIds.get(existWorkIds.size()-1).intValue();
 
-            for(int i=(maxWorkId+1)%1024;i<1024;i++){
+            for(int i=(maxWorkId+1)%(int)maxWorkerId;i<(int)maxWorkerId;i++){
+                if(existWorkIds.contains(i)){
+                    continue;
+                }
                 Long timestamp = workerIdLastTimeMap.get(i);
                 lastTimestamp = timestamp==null?0L:timestamp;
                 LOGGER.info("开始轮训查找可用workid。最新workid:{}",i);
@@ -189,7 +193,7 @@ public class IdWorker {
                     client.setData().inBackground().forPath(zkSequence,this.workerId.toString().getBytes());
                     //增加一条切换记录
                     client.create().creatingParentContainersIfNeeded().withMode(CreateMode.PERSISTENT_SEQUENTIAL).forPath(
-                            ROOT_PATH + SWITCH_PATH + FILE_SEPERATEOR + Utils.getIntranetIp(),switchStr.getBytes());
+                            ROOT_PATH + SWITCH_PATH + FILE_SEPERATEOR + Utils.getIntranetIp() + "-",switchStr.getBytes());
                     return lastTimestamp;
                 }
             }
