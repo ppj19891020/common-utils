@@ -87,26 +87,24 @@ public class IdWorker {
 
     }
 
-    public IdWorker(Long oldWorkerId){
-        if (oldWorkerId > maxWorkerId || oldWorkerId < 0) {
-            throw new IllegalArgumentException("worker Id can't be greater than %d or less than 0");
-        }
-        this.workerId = oldWorkerId;
-
+    public IdWorker(){
         // 校验服务器时间是否正常
         boolean check = this.checkServerTimesamp();
         if(!check){
             stop();
             Utils.halt_process(-1,"server timestamp greater than threshold,server startup fail, exit from the jvm");
         }
-
         // 校验workid是否已存在
         try{
             List<Long> existWorkerIds = this.getExistWorkerIds();
             if(null != existWorkerIds && existWorkerIds.size() > 0){
-                if(existWorkerIds.contains(workerId)){
-                   this.tryGenerateWorkIdByzk(this.timeGen());
-                }
+                Collections.sort(existWorkerIds);
+                Integer maxWorkId = existWorkerIds.get(existWorkerIds.size()-1).intValue() + 1;
+                this.workerId = Long.parseLong(maxWorkId.toString());
+                LOGGER.info("设置workid-最新值:{}",this.workerId);
+            }else {
+                this.workerId = 1L;
+                LOGGER.info("设置workid-默认值:{}",this.workerId);
             }
             // 初始化到zk中，保存到临时节点中
             zkSequence = client.create().creatingParentContainersIfNeeded().withMode(CreateMode.EPHEMERAL_SEQUENTIAL).forPath(ROOT_PATH + EPHEMEERAL_PATH +
@@ -135,6 +133,12 @@ public class IdWorker {
     private boolean checkServerTimesamp(){
         try{
             if(null != client){
+                Stat stat = client.checkExists().forPath(ROOT_PATH + EPHEMEERAL_HEART);
+                if(null == stat){
+                    // 表示还没服务器注册过
+                    LOGGER.info("服务器还没注册心跳，当前服务器时间正常");
+                    return true;
+                }
                 List<String> peershostPaths = client.getChildren().forPath(ROOT_PATH + EPHEMEERAL_HEART);
                 if(null == peershostPaths || peershostPaths.size() == 0){
                     // 表示还没服务器注册过
@@ -148,7 +152,7 @@ public class IdWorker {
                     total = total.add(new BigDecimal(serverTimestanp));
                 }
                 // 均值
-                BigDecimal average = total.divide(new BigDecimal(peershostPaths.size()));
+                BigDecimal average = total.divide(new BigDecimal(peershostPaths.size()),2, BigDecimal.ROUND_HALF_EVEN);
                 // 时间差大于阈值，则启动失败
                 if (Math.abs(average.longValue() - System.currentTimeMillis()) > TIMESTAMP_THRESHOLD){
                     LOGGER.info("校验服务器时间存在异常，超过阈值{}",TIMESTAMP_THRESHOLD);
@@ -220,7 +224,7 @@ public class IdWorker {
         try{
             active.set(false);
             lock.acquire();
-            LOGGER.info("更换workid-原先workid：{} 当前时间:{} 最后时间：{}" ,currentMillis,lastTimestamp,workerId);
+            LOGGER.info("更换workid-原先workid：{} 当前时间:{} 最后时间：{}",workerId,currentMillis,lastTimestamp);
             List<Long> existWorkIds = this.getExistWorkerIds();
             if(null == existWorkIds || existWorkIds.size() == 0){
                 return null;
@@ -239,7 +243,6 @@ public class IdWorker {
                 if(lastTimestamp <= currentMillis){
                     //切换新的workid
                     String switchStr = currentMillis+"--:"+workerId+"->"+i;
-
                     this.workerId = Long.valueOf(i);
                     //初始化workid冲突自动切换/运行中时间回拨自动切换
                     if(StringUtils.isNotEmpty(zkSequence)){
@@ -248,9 +251,9 @@ public class IdWorker {
                         if(stat != null){
                             client.setData().inBackground().forPath(zkSequence,this.workerId.toString().getBytes());
                         }
-                        LOGGER.info("时钟发生回拨-切换后的workid：{} 当前时间:{} 最后时间：{}" ,currentMillis,lastTimestamp,workerId);
+                        LOGGER.info("时钟发生回拨-切换后的workid：{} 当前时间:{} 最后时间：{}" ,workerId,currentMillis,lastTimestamp);
                     }else{
-                        LOGGER.info("初始化workid冲突切换-切换后的workid：{} 当前时间:{} 最后时间：{}" ,currentMillis,lastTimestamp,workerId);
+                        LOGGER.info("初始化workid冲突切换-切换后的workid：{} 当前时间:{} 最后时间：{}" ,workerId,currentMillis,lastTimestamp);
                     }
                     //增加一条切换记录
                     client.create().creatingParentContainersIfNeeded().withMode(CreateMode.PERSISTENT_SEQUENTIAL).forPath(

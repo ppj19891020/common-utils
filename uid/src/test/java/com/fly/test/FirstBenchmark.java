@@ -37,8 +37,8 @@ public class FirstBenchmark {
     //@Setup主要实现测试前的初始化工作
     @Setup
     public void setup(){
-        idWorker1 = new IdWorker(1L);
-        idWorker2 = new IdWorker(2L);
+        idWorker1 = new IdWorker();
+        idWorker2 = new IdWorker();
     }
 
     //方法级注解，表示该方法是需要进行 benchmark 的对象

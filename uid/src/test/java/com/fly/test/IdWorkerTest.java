@@ -6,6 +6,7 @@ import com.fly.xid.sequence.IdWorker;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import sun.jvm.hotspot.runtime.Threads;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -16,7 +17,9 @@ public class IdWorkerTest {
 
     @Test
     public void test() throws InterruptedException {
-        IdWorker idWorker = new IdWorker(1L);
+        IdWorker idWorker = new IdWorker();
+        Thread.sleep(5000l);
+        IdWorker idWorker2 = new IdWorker();
         Map<Long,Long> values = new HashMap<>();
 //        IdWorker idWorker1 = new IdWorker(2L);
 //        for (int i=0;i<10000;i++){
