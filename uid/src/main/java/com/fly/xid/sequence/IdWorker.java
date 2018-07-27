@@ -96,15 +96,21 @@ public class IdWorker {
         }
         // 校验workid是否已存在
         try{
-            List<Long> existWorkerIds = this.getExistWorkerIds();
-            if(null != existWorkerIds && existWorkerIds.size() > 0){
-                Collections.sort(existWorkerIds);
-                Integer maxWorkId = existWorkerIds.get(existWorkerIds.size()-1).intValue() + 1;
-                this.workerId = Long.parseLong(maxWorkId.toString());
-                LOGGER.info("设置workid-最新值:{}",this.workerId);
-            }else {
-                this.workerId = 1L;
-                LOGGER.info("设置workid-默认值:{}",this.workerId);
+            InterProcessLock lock = new InterProcessSemaphoreMutex(client, LOCK_PATH);
+            try{
+                lock.acquire();
+                List<Long> existWorkerIds = this.getExistWorkerIds();
+                if(null != existWorkerIds && existWorkerIds.size() > 0){
+                    Collections.sort(existWorkerIds);
+                    Integer maxWorkId = existWorkerIds.get(existWorkerIds.size()-1).intValue() + 1;
+                    this.workerId = Long.parseLong(maxWorkId.toString());
+                    LOGGER.info("设置workid-最新值:{}",this.workerId);
+                }else {
+                    this.workerId = 1L;
+                    LOGGER.info("设置workid-默认值:{}",this.workerId);
+                }
+            }finally {
+                lock.release();
             }
             // 初始化到zk中，保存到临时节点中
             zkSequence = client.create().creatingParentContainersIfNeeded().withMode(CreateMode.EPHEMERAL_SEQUENTIAL).forPath(ROOT_PATH + EPHEMEERAL_PATH +

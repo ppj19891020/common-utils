@@ -18,7 +18,7 @@ public class IdWorkerTest {
     @Test
     public void test() throws InterruptedException {
         IdWorker idWorker = new IdWorker();
-        Thread.sleep(5000l);
+//        Thread.sleep(5000l);
         IdWorker idWorker2 = new IdWorker();
         Map<Long,Long> values = new HashMap<>();
 //        IdWorker idWorker1 = new IdWorker(2L);
